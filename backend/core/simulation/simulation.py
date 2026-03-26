@@ -7,6 +7,7 @@ from backend.core.ai.neural_network import NeuralNetwork
 from backend.core.genetic.population import Genome, evolve
 from backend.core.environment.track import Track
 from backend.core.car.sensors import Sensors
+from backend.core.simulation.recorder import DataRecorder
 from shapely.geometry import Point, LineString
 
 class Simulation:
@@ -33,6 +34,11 @@ class Simulation:
         
         self.generation = 1
         self.paused = False
+        self.mode = "ga" # "ga", "dl", "manual"
+        self.recording = False
+        self.recorder = DataRecorder()
+        self.dl_model = None # To be loaded during DL mode
+        
         self.population = [Genome() for _ in range(POPULATION_SIZE)]
         self.reset_env()
 
@@ -52,6 +58,7 @@ class Simulation:
             while True:
                 self.handle_events()
                 if not self.paused:
+                    # In manual mode, we might wait for input here or sample at FPS
                     self.update()
                 self.draw()
                 self.clock.tick(FPS)
@@ -62,12 +69,25 @@ class Simulation:
             if event.type == pygame.QUIT:
                 self.save_best_and_quit()
             
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    self.recording = not self.recording
+                    if self.recording: self.recorder.start_session()
+                    else: self.recorder.stop_session()
+                
+                if event.key == pygame.K_m:
+                    modes = ["ga", "dl", "manual"]
+                    curr_idx = modes.index(self.mode)
+                    self.mode = modes[(curr_idx + 1) % len(modes)]
+                    print(f"[SIM] Switched to mode: {self.mode}")
+                    self.reset_env()
+
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if self.stop_btn.collidepoint(event.pos):
                     self.paused = not self.paused
                 
                 if self.load_btn.collidepoint(event.pos):
-                    from genetic.population import load_best_genome, create_population_from_saved
+                    from backend.core.genetic.population import load_best_genome, create_population_from_saved
                     saved = load_best_genome()
                     if saved:
                         self.population = create_population_from_saved(saved)
@@ -77,16 +97,37 @@ class Simulation:
     def update(self):
         alive_count = 0
         from backend.core.simulation.fitness import calculate_fitness
+        
+        # Manual Input Sampling
+        manual_action = [0, 0]
+        if self.mode == "manual" and not self.headless:
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_LEFT]: manual_action[0] = -1
+            if keys[pygame.K_RIGHT]: manual_action[0] = 1
+            if keys[pygame.K_UP]: manual_action[1] = 1
+            if keys[pygame.K_DOWN]: manual_action[1] = -1
+
         for car in self.cars:
             if car.alive:
-                # 1. Update sensors using the track mask
+                # 1. Update sensors
                 car.sensors = self.sensor_system.get_readings(
                     car.pos, car.angle, self.track
                 )
                 
-                # 2. Get AI action
-                inputs = car.get_inputs()
-                action = self.nn.predict(inputs, car.genome.weights)
+                # 2. Get Action based on mode
+                if self.mode == "ga":
+                    inputs = car.get_inputs()
+                    action = self.nn.predict(inputs, car.genome.weights)
+                elif self.mode == "dl" and self.dl_model:
+                    # To be implemented when model is ready
+                    inputs = car.get_inputs()
+                    import torch
+                    with torch.no_grad():
+                        action = self.dl_model(torch.FloatTensor(inputs)).numpy()
+                elif self.mode == "manual":
+                    action = manual_action
+                else:
+                    action = [0, 0] # Default
                 
                 # 3. Move car
                 prev_pos = Point(car.pos.x, car.pos.y)
@@ -101,18 +142,24 @@ class Simulation:
                     if movement_line.intersects(checkpoint):
                         car.last_checkpoint = next_checkpoint_idx
 
-                # 5. Collision check (Did we hit a wall/obstacle?)
+                # 5. Collision check
                 if self.track.is_colliding(car.pos):
                     car.alive = False
                     car.collided = True
                     car.genome.fitness = calculate_fitness(car)
                 
+                # 6. Record Data (Only for the first car in manual/GA champion mode for clarity)
+                if self.recording and (self.mode == "manual" or car == self.cars[0]):
+                    self.recorder.record(car.sensors, car.speed, action[0], action[1])
+                
                 alive_count += 1
 
-        if alive_count == 0:
+        if alive_count == 0 and self.mode == "ga":
             self.population = evolve(self.population)
             self.generation += 1
             self.reset_env()
+        elif alive_count == 0:
+            self.reset_env() # Just respawn in DL/Manual mode
 
     def draw(self):
         if self.headless: return

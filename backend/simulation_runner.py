@@ -6,13 +6,14 @@ from backend.core.genetic.population import Genome, create_population_from_saved
 import time
 
 class SimulationEngine(multiprocessing.Process):
-    def __init__(self, simulation_id, track_data, track_file=None, initial_genome=None, queue=None):
+    def __init__(self, simulation_id, track_data, track_file=None, initial_genome=None, queue=None, command_queue=None):
         super().__init__()
         self.simulation_id = simulation_id
         self.track_data = track_data
         self.track_file = track_file
         self.initial_genome = initial_genome
         self.queue = queue
+        self.command_queue = command_queue
         self.stop_event = multiprocessing.Event()
 
     def run(self):
@@ -32,6 +33,28 @@ class SimulationEngine(multiprocessing.Process):
 
         while not self.stop_event.is_set():
             try:
+                # Process Commands
+                if self.command_queue and not self.command_queue.empty():
+                    cmd = self.command_queue.get_nowait()
+                    if cmd.get("type") == "mode":
+                        sim.mode = cmd["value"]
+                        print(f"[ENGINE] Mode set to {sim.mode}")
+                        if sim.mode == "dl":
+                            import torch
+                            from backend.core.dl.model import DrivingModel
+                            sim.dl_model = DrivingModel()
+                            model_path = "backend/data/best_model.pth"
+                            if os.path.exists(model_path):
+                                sim.dl_model.load_state_dict(torch.load(model_path))
+                                sim.dl_model.eval()
+                                print(f"[ENGINE] Loaded DL model from {model_path}")
+                        sim.reset_env()
+                    elif cmd.get("type") == "recording":
+                        sim.recording = cmd["value"]
+                        if sim.recording: sim.recorder.start_session()
+                        else: sim.recorder.stop_session()
+                        print(f"[ENGINE] Recording: {sim.recording}")
+
                 sim.update()
                 
                 # Prepare state update for frontend

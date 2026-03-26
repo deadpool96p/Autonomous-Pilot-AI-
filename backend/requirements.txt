@@ -7,3 +7,8 @@ python-dotenv
 shapely
 numpy
 pygame
+torch
+torchvision
+gymnasium
+stable-baselines3
+pandas

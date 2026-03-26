@@ -21,3 +21,13 @@ class SimulationRun(BaseModel):
 class SimulationRunCreate(BaseModel):
     track_id: str
     status: str
+
+class DLConfig(BaseModel):
+    mode: str # "ga", "dl", "manual"
+    recording: bool
+
+class DLStatus(BaseModel):
+    is_recording: bool
+    current_mode: str
+    model_loaded: bool
+    last_log: Optional[str] = None

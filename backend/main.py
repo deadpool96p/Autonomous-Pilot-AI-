@@ -189,6 +189,42 @@ def load_best_genome():
         return {"status": "loaded"}
     raise HTTPException(status_code=404, detail="No saved genome found")
 
+@app.post("/simulations/config", response_model=schemas.DLStatus)
+def update_config(config: schemas.DLConfig):
+    # This acts on the most recently started active simulation
+    if not active_simulations:
+        raise HTTPException(status_code=404, detail="No active simulation")
+    
+    sim_id = list(active_simulations.keys())[-1]
+    cmd_q = active_simulations[sim_id]["command_queue"]
+    
+    cmd_q.put({"type": "mode", "value": config.mode})
+    cmd_q.put({"type": "recording", "value": config.recording})
+    
+    return schemas.DLStatus(
+        is_recording=config.recording,
+        current_mode=config.mode,
+        model_loaded=os.path.exists("backend/data/best_model.pth")
+    )
+
+@app.post("/dl/train")
+async def train_model():
+    # Behavioral Cloning training from the latest log
+    data_dir = "backend/data"
+    logs = [f for f in os.listdir(data_dir) if f.startswith("driving_log_") and f.endswith(".csv")]
+    if not logs:
+        raise HTTPException(status_code=404, detail="No driving logs found")
+    
+    logs.sort(reverse=True)
+    latest_log = os.path.join(data_dir, logs[0])
+    
+    from backend.core.dl.trainer import train_bc
+    try:
+        model_path = train_bc(latest_log)
+        return {"status": "trained", "model": model_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(broadcast_updates())
