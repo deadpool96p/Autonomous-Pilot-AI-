@@ -9,9 +9,14 @@ interface ControlPanelProps {
   setSimulationId: (val: string | null) => void
   selectedTrack: string | null
   setSelectedTrack: (val: string | null) => void
+  showDynamicObjects: boolean
+  setShowDynamicObjects: (val: boolean) => void
 }
 
-const ControlPanel = ({ isRunning, setIsRunning, simulationId, setSimulationId, selectedTrack, setSelectedTrack }: ControlPanelProps) => {
+const ControlPanel = ({ 
+  isRunning, setIsRunning, simulationId, setSimulationId, 
+  selectedTrack, setSelectedTrack, showDynamicObjects, setShowDynamicObjects 
+}: ControlPanelProps) => {
   const [tracks, setTracks] = useState<any[]>([])
   const [mode, setMode] = useState<string>('ga')
   const [isRecording, setIsRecording] = useState<boolean>(false)
@@ -47,7 +52,11 @@ const ControlPanel = ({ isRunning, setIsRunning, simulationId, setSimulationId, 
   const handleStart = async () => {
     if (!selectedTrack) return
     try {
-      const res = await axios.post('/api/simulations/start', { track_id: String(selectedTrack), status: "running" })
+      const res = await axios.post('/api/simulations/start', { 
+        track_id: String(selectedTrack), 
+        status: "running",
+        mode: mode 
+      })
       setSimulationId(res.data.id)
       setIsRunning(true)
     } catch (err) {
@@ -126,62 +135,81 @@ const ControlPanel = ({ isRunning, setIsRunning, simulationId, setSimulationId, 
           {!isRunning ? (
             <button 
               onClick={handleStart}
-              className="flex items-center justify-center gap-2 rounded-lg bg-primary py-2.5 font-semibold text-white hover:bg-blue-600 transition-all"
+              className="flex items-center justify-center gap-2 rounded-lg bg-primary py-2.5 font-semibold text-white hover:bg-blue-600 transition-all shadow-lg shadow-primary/20"
             >
               <Play size={18} fill="white" />
               Initialize System
             </button>
           ) : (
-            <div className="flex flex-col gap-2">
-              <button 
-                onClick={handleStop}
-                className="flex items-center justify-center gap-2 rounded-lg bg-red-500/10 py-2.5 font-semibold text-red-500 border border-red-500/20 hover:bg-red-500/20 transition-all"
+            <button 
+              onClick={handleStop}
+              className="flex items-center justify-center gap-2 rounded-lg bg-red-500/10 py-2.5 font-semibold text-red-500 border border-red-500/20 hover:bg-red-500/20 transition-all"
+            >
+              <Square size={18} fill="currentColor" />
+              Terminate Run
+            </button>
+          )}
+
+          <div className="mt-4 border-t border-gray-800 pt-4">
+            <label className="mb-2 block text-xs font-bold uppercase text-gray-500">Intelligence Mode</label>
+            <div className="grid grid-cols-3 gap-2">
+              {['ga', 'dl', 'pid'].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => handleConfigUpdate(m, isRecording)}
+                  className={`rounded-lg py-1.5 text-xs font-bold uppercase transition-all border ${
+                    mode === m 
+                    ? 'bg-primary text-white border-primary' 
+                    : 'bg-black text-gray-500 border-gray-800 hover:border-gray-600'
+                  }`}
+                >
+                  {m === 'ga' ? 'Evolution (GA)' : m === 'dl' ? 'Deep Learning (DL)' : 'Lane Follow (PID)'}
+                </button>
+              ))}
+            </div>
+            
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                onClick={() => handleConfigUpdate(mode, !isRecording)}
+                disabled={!isRunning}
+                className={`flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-bold uppercase transition-all border ${
+                  isRecording 
+                  ? 'bg-red-500 text-white border-red-500 animate-pulse' 
+                  : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
+                } disabled:opacity-30 disabled:cursor-not-allowed`}
               >
-                <Square size={18} fill="currentColor" />
-                Terminate Run
+                {isRecording ? 'Stop Recording' : 'Start Recording Data'}
               </button>
               
-              <div className="mt-4 border-t border-gray-800 pt-4">
-                <label className="mb-2 block text-xs font-bold uppercase text-gray-500">Training Logic</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {['ga', 'dl', 'manual'].map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => handleConfigUpdate(m, isRecording)}
-                      className={`rounded-lg py-1.5 text-xs font-bold uppercase transition-all border ${
-                        mode === m 
-                        ? 'bg-primary text-white border-primary' 
-                        : 'bg-black text-gray-500 border-gray-800 hover:border-gray-600'
-                      }`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-                
-                <div className="mt-3 flex flex-col gap-2">
-                  <button
-                    onClick={() => handleConfigUpdate(mode, !isRecording)}
-                    className={`flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-bold uppercase transition-all border ${
-                      isRecording 
-                      ? 'bg-red-500 text-white border-red-500 animate-pulse' 
-                      : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
-                    }`}
-                  >
-                    {isRecording ? 'Stop Recording' : 'Start Recording'}
-                  </button>
-                  
-                  <button
-                    onClick={handleTrain}
-                    disabled={isRecording}
-                    className="rounded-lg bg-gray-800 py-2 text-xs font-bold uppercase text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50"
-                  >
-                    {trainingStatus || 'Train BC Model'}
-                  </button>
-                </div>
-              </div>
+              <button
+                onClick={handleTrain}
+                disabled={isRecording}
+                className="flex items-center justify-center gap-2 rounded-lg bg-indigo-900/20 py-2 text-xs font-bold uppercase text-indigo-400 border border-indigo-900/30 hover:bg-indigo-900/40 disabled:opacity-50 transition-colors"
+              >
+                 <RefreshCw size={12} className={trainingStatus.includes('...') ? 'animate-spin' : ''} />
+                {trainingStatus || 'Train PilotNet Model'}
+              </button>
+              
+              <button
+                onClick={() => handleConfigUpdate(mode, isRecording)}
+                className="flex items-center justify-center gap-2 rounded-lg bg-emerald-900/20 py-2 text-xs font-bold uppercase text-emerald-400 border border-emerald-900/30 hover:bg-emerald-900/40 transition-colors"
+                title="Refresh model from disk"
+              >
+                Reload / Load Model
+              </button>
+
+              <button
+                onClick={() => setShowDynamicObjects(!showDynamicObjects)}
+                className={`flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-bold uppercase transition-all border ${
+                  showDynamicObjects 
+                  ? 'bg-blue-900/20 text-blue-400 border-blue-900/30 hover:bg-blue-900/40' 
+                  : 'bg-gray-800 text-gray-500 border-gray-700 hover:bg-gray-700'
+                }`}
+              >
+                {showDynamicObjects ? 'Hide Dynamic Objects' : 'Show Dynamic Objects'}
+              </button>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

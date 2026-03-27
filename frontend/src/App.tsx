@@ -4,12 +4,16 @@ import axios from 'axios'
 import SimulationCanvas from './components/SimulationCanvas'
 import ControlPanel from './components/ControlPanel'
 import StatsPanel from './components/StatsPanel'
+import LaneVisualization from './components/LaneVisualization'
 
 function App() {
   const [simulationId, setSimulationId] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [selectedTrack, setSelectedTrack] = useState<string | null>(null)
-  const [stats, setStats] = useState({ generation: 1, alive: 0, bestFitness: 0, progress: 0 })
+  const [showDynamicObjects, setShowDynamicObjects] = useState<boolean>(true)
+  const [showLanes, setShowLanes] = useState<boolean>(true)
+  const [showLookahead, setShowLookahead] = useState<boolean>(true)
+  const [stats, setStats] = useState<any>({ generation: 1, alive: 0, bestFitness: 0 })
 
   const handleReset = async () => {
     if (window.confirm("Are you sure? This will clear all training data.")) {
@@ -58,6 +62,12 @@ function App() {
             setSimulationId={setSimulationId}
             selectedTrack={selectedTrack}
             setSelectedTrack={setSelectedTrack}
+            showDynamicObjects={showDynamicObjects}
+            setShowDynamicObjects={setShowDynamicObjects}
+          />
+          <LaneVisualization 
+            showLanes={showLanes} setShowLanes={setShowLanes}
+            showLookahead={showLookahead} setShowLookahead={setShowLookahead}
           />
           <StatsPanel stats={stats} />
           
@@ -79,6 +89,9 @@ function App() {
             isRunning={isRunning} 
             selectedTrack={selectedTrack}
             setStats={setStats} 
+            showDynamicObjects={showDynamicObjects}
+            showLanes={showLanes}
+            showLookahead={showLookahead}
           />
           
           {/* Overlay Controls */}
