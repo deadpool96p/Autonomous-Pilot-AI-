@@ -1,4 +1,4 @@
-import { TrendingUp, Users, Target, Zap, AlertTriangle, ShieldCheck } from 'lucide-react'
+import { TrendingUp, Users, Target, Zap } from 'lucide-react'
 import CollisionStats from './CollisionStats'
 
 interface StatsPanelProps {

@@ -19,12 +19,13 @@ import math
 class SimulationEngine(threading.Thread):
     def __init__(self, sim_id, track_data, state_queue):
         super().__init__()
+        self.daemon = True  # Allow clean process exit
         self.sim_id = sim_id
         self.state_queue = state_queue
         self.running = True
         self.paused = False
         
-        # Mode: "ga" or "dl"
+        # Mode: "ga" or "dl" or "pid"
         self.mode = "ga"
         self.recording = False
         self.recording_dir = "backend/data/training"
@@ -59,13 +60,21 @@ class SimulationEngine(threading.Thread):
         self.cars = []
         self.dynamic_objects = []
         track_id = track_data.get("id", "default_track")
-        self.auto_learner = AutoLearningManager(track_id=track_id)
+        
+        try:
+            self.auto_learner = AutoLearningManager(track_id=track_id)
+        except Exception as e:
+            print(f"[!] AutoLearningManager init failed: {e}")
+            self.auto_learner = None
         
         self.lane_follower = None
         if "roads" in track_data and len(track_data["roads"]) > 0:
             centerline = track_data["roads"][0].get("points", [])
             if len(centerline) > 1:
-                self.lane_follower = LaneFollower(centerline)
+                try:
+                    self.lane_follower = LaneFollower(centerline)
+                except Exception as e:
+                    print(f"[!] LaneFollower init failed: {e}")
                 
         self._load_dynamic_objects(track_data)
         self.reset_cars()
@@ -74,73 +83,95 @@ class SimulationEngine(threading.Thread):
         objs_data = track_data.get("dynamic_objects", [])
         self.dynamic_objects = []
         for i, obj in enumerate(objs_data):
-            if obj["type"] == "pedestrian":
-                self.dynamic_objects.append(Pedestrian(f"p_{i}", obj["start_node"], obj.get("speed")))
-            elif obj["type"] == "npc_car":
-                self.dynamic_objects.append(NPCCar(f"npc_{i}", obj["start_node"], obj.get("speed")))
+            try:
+                if obj["type"] == "pedestrian":
+                    self.dynamic_objects.append(Pedestrian(f"p_{i}", obj["start_node"], obj.get("speed")))
+                elif obj["type"] == "npc_car":
+                    self.dynamic_objects.append(NPCCar(f"npc_{i}", obj["start_node"], obj.get("speed")))
+            except Exception as e:
+                print(f"[!] Failed to load dynamic object {i}: {e}")
 
     def reset_cars(self):
         self.cars = []
-        # Support starting position from track data
-        start_x, start_y = self.track.data.get("start_pos", [200, 300])
-        start_angle = self.track.data.get("start_angle", 0)
+        # Use track's robust start position extraction
+        start_x, start_y, start_angle = self.track.get_start_position()
         
         if self.mode == "ga":
             for _ in range(self.pop_size):
                 self.cars.append(Car(start_x, start_y, start_angle))
         else:
-            # Single or few cars for DL
+            # Single or few cars for DL/PID
             self.cars.append(Car(start_x, start_y, start_angle))
 
     def stop(self):
         self.running = False
 
     def run_one_step(self, dt=0.016):
+        # Clamp dt to avoid physics explosions
+        dt = min(dt, 0.1)
+        
         # 1. Update Dynamic Objects
         for obj in self.dynamic_objects:
-            obj.update(dt, self)
+            try:
+                obj.update(dt, self)
+            except Exception:
+                pass
             
         # 2. Update Cars
         all_dead = True
         recorded_this_step = False
+        last_action = [0, 0]  # Track last action for auto-collection
+        
         for i, car in enumerate(self.cars):
             if not car.alive: continue
             all_dead = False
             
             # Get Inputs
-            sensor_readings = self.sensors.get_readings(car, self.track, self.dynamic_objects)
+            try:
+                sensor_readings = self.sensors.get_readings(car, self.track, self.dynamic_objects)
+            except Exception:
+                sensor_readings = np.ones(self.sensors.num_rays) * self.sensors.ray_length
             
             # Get Action
+            action = [0, 0]
             if self.mode == "ga":
-                self.ga_nn.set_weights(self.population.genomes[i].weights)
-                with torch.no_grad():
-                    inp = torch.FloatTensor(sensor_readings / 150.0)
-                    action = self.ga_nn(inp).numpy()
+                try:
+                    self.ga_nn.set_weights(self.population.genomes[i].weights)
+                    with torch.no_grad():
+                        inp = torch.FloatTensor(sensor_readings / 150.0)
+                        action = self.ga_nn(inp).numpy()
+                except Exception:
+                    action = [0, 0.5]
             elif self.mode == "pid":
                 if self.lane_follower:
-                    # Car speed needs to be tracked or approximated; using dummy 5.0 if car.speed doesn't exist.
-                    # Let's ensure car.speed exists or calculate it.
                     speed = getattr(car, 'speed', 5.0) 
-                    action = self.lane_follower.get_steering_and_throttle(car.x, car.y, car.angle, speed)
+                    try:
+                        action = self.lane_follower.get_steering_and_throttle(car.x, car.y, car.angle, speed)
+                    except Exception:
+                        action = [0, 0.5]
                 else:
-                    action = [0, 0]
+                    action = [0, 0.5]
             else:
                 try:
                     view = self.sensors.get_camera_view(car, self.track)
                     view_tensor = torch.FloatTensor(view).permute(2,0,1).unsqueeze(0).to(self.device) / 255.0
                     with torch.no_grad():
                         action = self.dl_model(view_tensor).cpu().squeeze().numpy()
-                except:
-                    action = [0, 0]
+                except Exception:
+                    action = [0, 0.5]
+            
+            last_action = action
             
             # Update Physics
             car.update(action, dt)
             
             # Record Data (for behavioral cloning)
-            # Record from the first alive car to maximize data collection
             if self.recording and self.mode == "ga" and car.alive and not recorded_this_step:
-                self.save_frame(car, action)
-                recorded_this_step = True
+                try:
+                    self.save_frame(car, action)
+                    recorded_this_step = True
+                except Exception as e:
+                    print(f"[!] Recording failed: {e}")
             
             # Check Collision (Track)
             if self.track.check_collision(car.get_bbox()):
@@ -155,7 +186,7 @@ class SimulationEngine(threading.Thread):
                     if dist < (car.width/2 + obj.width/2):
                         car.alive = False
                         car.collisions += 1
-                        car.fitness -= 200 # Collision penalty
+                        car.fitness -= 200  # Collision penalty
                         if obj.type == "pedestrian":
                             self.collision_stats["pedestrian_hits"] += 1
                         else:
@@ -166,23 +197,27 @@ class SimulationEngine(threading.Thread):
             # Update Fitness
             if self.mode == "ga":
                 car.fitness = car.last_checkpoint * 100 + car.distance_traveled / 10.0
-                self.population.genomes[i].fitness = car.fitness
+                if i < len(self.population.genomes):
+                    self.population.genomes[i].fitness = car.fitness
 
         # Auto-collection from the best alive car
-        if self.mode == "ga" and not recorded_this_step:
-            alive_cars = [c for c in self.cars if c.alive]
-            if alive_cars:
-                best_car = max(alive_cars, key=lambda x: x.fitness)
-                # We collect data even if this isn't technically the "champion" yet,
-                # as long as it's doing well (no collisions so far)
-                if best_car.collisions == 0:
-                    view = self.sensors.get_camera_view(best_car, self.track)
-                    # For GA, we use the current sensor-based action as pseudo-labels for BC
-                    # Wait, GA doesn't have "labels". We use the current action it took.
-                    self.auto_learner.add_data(view, action[0], action[1], best_car.fitness/1000.0, best_car.collisions)
+        if self.auto_learner and self.mode == "ga":
+            try:
+                alive_cars = [c for c in self.cars if c.alive]
+                if alive_cars:
+                    best_car = max(alive_cars, key=lambda x: x.fitness)
+                    if best_car.collisions == 0:
+                        view = self.sensors.get_camera_view(best_car, self.track)
+                        self.auto_learner.add_data(view, last_action[0], last_action[1], best_car.fitness/1000.0, best_car.collisions)
+            except Exception:
+                pass
         
         # Periodic check for training
-        self.auto_learner.check_and_trigger_training()
+        if self.auto_learner:
+            try:
+                self.auto_learner.check_and_trigger_training()
+            except Exception:
+                pass
 
         return all_dead
 
@@ -221,42 +256,59 @@ class SimulationEngine(threading.Thread):
                 time.sleep(0.1)
                 continue
                 
-            dt = time.time() - last_time
-            last_time = time.time()
+            now = time.time()
+            dt = now - last_time
+            last_time = now
             
             if not self.cars:
                 self.reset_cars()
                 
             all_dead = self.run_one_step(dt)
             
-            # evolution logic ...
+            # Evolution logic
             if all_dead and self.mode == "ga":
                 self.population.evolve()
                 self.reset_cars()
-            elif all_dead and self.mode == "dl":
+            elif all_dead and (self.mode == "dl" or self.mode == "pid"):
                 self.reset_cars()
                 
             self.broadcast_state()
             time.sleep(0.016)
 
     def broadcast_state(self):
+        # Get track bounds for frontend camera
+        bounds = self.track.get_bounds()
+        
         state = {
             "sim_id": self.sim_id,
             "generation": self.population.generation if self.mode == "ga" else 0,
             "mode": self.mode,
             "timestamp": time.time(),
+            "track_bounds": {
+                "min_x": bounds[0],
+                "min_y": bounds[1],
+                "max_x": bounds[2],
+                "max_y": bounds[3]
+            },
             "cars": [
                 {
                     "x": c.x, "y": c.y, "angle": c.angle, 
                     "alive": c.alive, "fitness": c.fitness,
-                    "sensors": self.sensors.get_readings(c, self.track, self.dynamic_objects).tolist()
+                    "sensors": self._safe_get_sensors(c)
                 } for c in self.cars
             ],
             "dynamic_objects": [obj.get_state() for obj in self.dynamic_objects if obj.alive],
             "stats": self.collision_stats,
-            "auto_learning": self.auto_learner.get_status()
+            "auto_learning": self.auto_learner.get_status() if self.auto_learner else {"is_training": False, "data_count": 0, "last_train": None}
         }
         try:
             self.state_queue.put_nowait(state)
         except:
             pass
+    
+    def _safe_get_sensors(self, car):
+        """Safely get sensor readings without crashing the broadcast."""
+        try:
+            return self.sensors.get_readings(car, self.track, self.dynamic_objects).tolist()
+        except Exception:
+            return [150.0] * self.sensors.num_rays

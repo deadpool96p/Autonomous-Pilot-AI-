@@ -21,6 +21,7 @@ class SimulationRun(BaseModel):
 class SimulationRunCreate(BaseModel):
     track_id: str
     status: str
+    mode: Optional[str] = "ga"
 
 class DLConfig(BaseModel):
     mode: str # "ga", "dl", "manual"

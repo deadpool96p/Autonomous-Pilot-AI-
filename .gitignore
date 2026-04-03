@@ -40,14 +40,24 @@ wheels/
 .pytest_cache/
 
 # Simulation specific
-backend/data/*.pkl
-backend/data/*.json
-!backend/core/environment/tracks/*.json
+backend/data/training/
+backend/data/training_auto/
+backend/data/images/
+backend/data/tracks/generated_*.json
+backend/models/*.pth
 saved_genome.pkl
 *.log
+*.pkl
+
+# Cache & datasets
+cache/
+dataset/
 
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# Temp
+git_status_output.txt
